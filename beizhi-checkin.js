@@ -214,31 +214,39 @@ function checkinReason(payload, response) {
 }
 
 function captureCookie() {
+  const url = String($request.url || "");
   const cookie = headerValue($request.headers, "Cookie").trim();
   const userAgent = headerValue($request.headers, "User-Agent").trim() || DEFAULT_UA;
   const account = getArgument("account") || "账号";
   const notifyEnabled = getArgument("notify") !== "false";
 
-  // Cookie 可能是仅用于 refresh 的 HttpOnly 会话，不能用 /self 预校验。
-  if (!cookie) {
-    notifyOnce("empty:" + account, "北执签到", account, "未获取到 Cookie，请确认已登录后重新打开个人中心。", notifyEnabled);
+  // 只捕获北执个人中心和认证 API 的请求，其他请求直接忽略。
+  if (!/^https:\/\/beizhi\.sylu\.cc\/(?:profile(?:[\/?#]|$)|api\/user\/(?:self|auth\/refresh|checkin)(?:[\/?#]|$))/.test(url) || !cookie) {
     $done({});
     return;
   }
 
   const stored = readJSON(COOKIE_KEY, []);
-  const current = stored.find(item => item && item.name === account);
-  const captured = readJSON(COOKIE_CAPTURED_KEY, {});
-  const sameCookie = current && current.cookie === cookie && current.ua === userAgent;
-  const next = stored.filter(item => item && item.name !== account);
-  next.push({ name: account, identity: "name:" + account, cookie, ua: userAgent });
+  const sameCookieIndex = stored.findIndex(item => item && item.cookie === cookie);
+  const sameCookie = sameCookieIndex >= 0;
+  let name = account;
+  let suffix = 2;
+  while (stored.some(item => item && item.name === name && item.cookie !== cookie)) name = account + "-" + suffix++;
+  const record = { name, identity: "cookie:" + cookie.slice(0, 24), cookie, ua: userAgent };
+  const next = stored.slice();
+  if (sameCookie) next[sameCookieIndex] = { ...next[sameCookieIndex], ...record };
+  else next.push(record);
 
   if (!writeJSON(COOKIE_KEY, next)) {
-    notify("北执签到", account, "Cookie 保存失败。", notifyEnabled);
-  } else if (!sameCookie || captured[account] !== cookie) {
-    captured[account] = cookie;
-    writeJSON(COOKIE_CAPTURED_KEY, captured);
-    notify("北执签到", account, "Cookie 获取成功，当前共保存 " + next.length + " 个账号", notifyEnabled);
+    notify("北执签到", name, "Cookie 保存失败。", notifyEnabled);
+  } else {
+    const captured = readJSON(COOKIE_CAPTURED_KEY, {});
+    const noticeKey = cookie.slice(0, 32);
+    if (captured[noticeKey] !== cookie) {
+      captured[noticeKey] = cookie;
+      writeJSON(COOKIE_CAPTURED_KEY, captured);
+      notify("北执签到", name, "Cookie 获取成功，当前共保存 " + next.length + " 个账号", notifyEnabled);
+    }
   }
   $done({});
 }

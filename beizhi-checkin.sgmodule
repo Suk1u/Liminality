@@ -5,8 +5,8 @@
 #!arguments=定时时间:30 8 * * *,定时任务:北执签到,获取Cookie:北执Cookie,MITM:hostname,账号:账号1,通知:true,Cookie通知:true,策略:DIRECT
 #!arguments-desc=定时时间：Cron 表达式，默认每天 08:30 执行。\n\n定时任务：控制每日自动签到，输入 # 表示禁用。\n\n获取Cookie：控制 Cookie 捕获脚本，输入 # 表示禁用。设置“账号”参数后登录对应账号并打开 https://beizhi.sylu.cc/profile；多个账号重复此步骤即可。\n\nMITM：控制是否追加 beizhi.sylu.cc 到 MITM，输入 # 表示禁用。\n\n账号：当前捕获 Cookie 对应的账号名称。每个账号使用不同名称。\n\n通知：true/false，控制每日签到和异常通知。\n\nCookie通知：true/false，控制 Cookie 捕获通知。\n\n策略：Surge 请求策略，默认 DIRECT。\n
 [Script]
-# 登录后打开 https://beizhi.sylu.cc/profile 捕获当前账号 Cookie
-{{{获取Cookie}}} = type=http-request,pattern=^https:\/\/beizhi\.sylu\.cc\/profile(?:[\/?#]|$),script-path=https://raw.githubusercontent.com/Suk1u/Liminality/refs/heads/main/beizhi-checkin.js,script-update-interval=0,timeout=15,argument="account={{{账号}}}&notify={{{Cookie通知}}}"
+# 登录后打开 https://beizhi.sylu.cc/profile，从认证请求捕获当前账号 Cookie
+{{{获取Cookie}}} = type=http-request,pattern=^https:\/\/beizhi\.sylu\.cc\/,script-path=https://raw.githubusercontent.com/Suk1u/Liminality/refs/heads/main/beizhi-checkin.js,script-update-interval=0,timeout=15,argument="account={{{账号}}}&notify={{{Cookie通知}}}"
 # 每日计划任务，默认每天 08:30 执行
 {{{定时任务}}} = type=cron,cronexp="{{{定时时间}}}",script-path=https://raw.githubusercontent.com/Suk1u/Liminality/refs/heads/main/beizhi-checkin.js,script-update-interval=0,timeout=60,wake-system=true,argument="notify={{{通知}}}&policy={{{策略}}}"
 
