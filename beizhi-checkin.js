@@ -129,7 +129,7 @@ function captureCookie() {
   const account = getArgument("account") || "账号";
   const notifyEnabled = getArgument("notify") !== "false";
   if (!cookie) {
-    notify("北之签到", account, "未捕获到 Cookie，请确认已登录并重新打开个人中心。", notifyEnabled);
+    notify("北执签到", account, "未捕获到 Cookie，请确认已登录并重新打开个人中心。", notifyEnabled);
     $done({});
     return;
   }
@@ -138,9 +138,9 @@ function captureCookie() {
   const next = stored.filter(item => item && item.name !== account && item.cookie !== cookie);
   next.unshift({ name: account, cookie });
   if (!writeJSON(COOKIE_KEY, next)) {
-    notify("北之签到", account, "Cookie 保存失败。", notifyEnabled);
+    notify("北执签到", account, "Cookie 保存失败。", notifyEnabled);
   } else {
-    notify("北之签到", account, "Cookie 已保存，可用于定时签到。", notifyEnabled);
+    notify("北执签到", account, "Cookie 已保存，可用于定时签到。", notifyEnabled);
   }
   $done({});
 }
@@ -180,7 +180,7 @@ async function run() {
   const stored = readJSON(COOKIE_KEY, []);
   const accounts = mergeAccounts(configured, Array.isArray(stored) ? stored : []);
   if (!accounts.length) {
-    notify("北之签到", "未配置账号", "请在模块参数中填写 Cookie，格式：账号1:::Cookie|||账号2:::Cookie。", notifyEnabled);
+    notify("北执签到", "未配置账号", "请先登录并打开个人中心捕获 Cookie。", notifyEnabled);
     $done();
     return;
   }
@@ -192,9 +192,9 @@ async function run() {
   }
   const failed = results.filter(item => !item.ok).length;
   const body = results.map((item, index) => (index + 1) + ". " + item.name + "：" + item.text).join("\n");
-  notify("北之每日签到", failed ? (failed + " 个账号失败") : (results.length + " 个账号完成"), body, notifyEnabled || failed > 0);
+  notify("北执每日签到", failed ? (failed + " 个账号失败") : (results.length + " 个账号完成"), body, notifyEnabled || failed > 0);
   $done();
 }
 
-if (typeof $request !== "undefined" && $request) captureCookie();
+if (typeof $request !== "undefined" && $request && typeof $script !== "undefined" && $script.type === "http-request") captureCookie();
 else run();
