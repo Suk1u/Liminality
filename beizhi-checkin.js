@@ -216,49 +216,31 @@ function checkinReason(payload, response) {
 function captureCookie() {
   const cookie = headerValue($request.headers, "Cookie").trim();
   const userAgent = headerValue($request.headers, "User-Agent").trim() || DEFAULT_UA;
-  const configuredName = getArgument("account") || "账号";
+  const account = getArgument("account") || "账号";
   const notifyEnabled = getArgument("notify") !== "false";
 
+  // Cookie 可能是仅用于 refresh 的 HttpOnly 会话，不能用 /self 预校验。
   if (!cookie) {
-    notifyOnce("empty:" + configuredName, "北执签到", configuredName, "未获取到 Cookie，请确认已登录后重新打开个人中心。", notifyEnabled);
+    notifyOnce("empty:" + account, "北执签到", account, "未获取到 Cookie，请确认已登录后重新打开个人中心。", notifyEnabled);
     $done({});
     return;
   }
 
-  const headers = accountHeaders(cookie, "", userAgent);
-  request("GET", BASE_URL + "/api/user/self", headers, "DIRECT").then(result => {
-    const payload = parseBody(result.data);
-    if (result.error || result.response.status !== 200 || payload.success === false) {
-      const reason = apiMessage(payload, result.error || "HTTP " + result.response.status);
-      notifyOnce("invalid:" + configuredName, "北执签到", configuredName, "Cookie 校验失败：" + reason, notifyEnabled);
-      $done({});
-      return;
-    }
+  const stored = readJSON(COOKIE_KEY, []);
+  const current = stored.find(item => item && item.name === account);
+  const captured = readJSON(COOKIE_CAPTURED_KEY, {});
+  const sameCookie = current && current.cookie === cookie && current.ua === userAgent;
+  const next = stored.filter(item => item && item.name !== account);
+  next.push({ name: account, identity: "name:" + account, cookie, ua: userAgent });
 
-    const user = extractUser(payload);
-    const userId = getFirstValue([user], ["id", "user_id", "userId"]);
-    const username = getFirstValue([user], ["username", "display_name", "name"]);
-    const identity = userId !== undefined ? "id:" + userId : "name:" + (username || configuredName);
-    const stored = readJSON(COOKIE_KEY, []);
-    const current = stored.find(item => item && (item.identity === identity || item.cookie === cookie));
-    const captured = readJSON(COOKIE_CAPTURED_KEY, {});
-    const name = String(username || configuredName);
-    const sameCookie = current && current.cookie === cookie && current.ua === userAgent;
-    const next = stored.filter(item => item && item.identity !== identity && item.cookie !== cookie);
-    next.push({ name, identity, cookie, ua: userAgent });
-
-    if (!writeJSON(COOKIE_KEY, next)) {
-      notify("北执签到", name, "Cookie 保存失败。", notifyEnabled);
-    } else if (!sameCookie || captured[identity] !== cookie) {
-      captured[identity] = cookie;
-      writeJSON(COOKIE_CAPTURED_KEY, captured);
-      notify("北执签到", name, "Cookie 获取成功，当前共保存 " + next.length + " 个账号", notifyEnabled);
-    }
-    $done({});
-  }).catch(error => {
-    notifyOnce("error:" + configuredName, "北执签到", configuredName, "Cookie 校验请求失败：" + error, notifyEnabled);
-    $done({});
-  });
+  if (!writeJSON(COOKIE_KEY, next)) {
+    notify("北执签到", account, "Cookie 保存失败。", notifyEnabled);
+  } else if (!sameCookie || captured[account] !== cookie) {
+    captured[account] = cookie;
+    writeJSON(COOKIE_CAPTURED_KEY, captured);
+    notify("北执签到", account, "Cookie 获取成功，当前共保存 " + next.length + " 个账号", notifyEnabled);
+  }
+  $done({});
 }
 
 async function runAccount(account, policy) {
