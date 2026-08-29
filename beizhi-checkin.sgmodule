@@ -6,8 +6,8 @@
 #!arguments-desc=Cookie 格式：账号1:::Cookie|||账号2:::Cookie；也可以启用 Cookie 捕获，设置账号名后打开一次个人中心。定时任务使用本地时区。
 
 [Script]
-{{{获取Cookie}}} = type=http-request,pattern=^https:\/\/beizhi\.sylu\.cc\/profile(?:[\/?#]|$),script-path=beizhi-checkin.js,timeout=15,argument="account={{{账号}}}&notify={{{Cookie通知}}}"
-{{{定时任务}}} = type=cron,cronexp="{{{定时时间}}}",script-path=beizhi-checkin.js,timeout=60,wake-system=true,argument="cookies={{{Cookie}}}&notify={{{通知}}}&policy={{{策略}}}"
+{{{获取Cookie}}} = type=http-request,pattern=^https:\/\/beizhi\.sylu\.cc\/profile(?:[\/?#]|$),script-path=https://raw.githubusercontent.com/Suk1u/LiminalityLiminality/refs/heads/main/beizhi-checkin.js,script-update-interval=86400,timeout=15,argument="account={{{账号}}}&notify={{{Cookie通知}}}"
+{{{定时任务}}} = type=cron,cronexp="{{{定时时间}}}",script-path=https://raw.githubusercontent.com/Suk1u/LiminalityLiminality/refs/heads/main/beizhi-checkin.js,script-update-interval=86400,timeout=60,wake-system=true,argument="cookies={{{Cookie}}}&notify={{{通知}}}&policy={{{策略}}}"
 
 [MITM]
 hostname = %APPEND% beizhi.sylu.cc
