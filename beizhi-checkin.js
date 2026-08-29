@@ -49,6 +49,30 @@ function headerValue(headers, wanted) {
   return key ? String(headers[key] || "") : "";
 }
 
+function accountName(name, fallback) {
+  return String(name || fallback).trim() || fallback;
+}
+
+// 账号标识：去除首尾空白后精确比较，保持大小写（A 与 a 是两个账号）。
+function accountKey(name) {
+  return accountName(name, "账号");
+}
+
+function uniqueAccounts(accounts) {
+  const byName = {};
+  const order = [];
+  accounts.forEach((item, index) => {
+    const name = accountName(item && item.name, "账号" + (index + 1));
+    const cookie = String(item && item.cookie || "").trim();
+    if (!cookie) return;
+    const key = accountKey(name);
+    if (!(key in byName)) order.push(key);
+    // 保留已有 ua，同名后值覆盖 name/cookie。
+    byName[key] = { ...(byName[key] || {}), ...item, name, cookie };
+  });
+  return order.map(key => byName[key]);
+}
+
 function parseAccounts(raw) {
   if (!raw) return [];
   const text = String(raw).trim();
@@ -59,28 +83,22 @@ function parseAccounts(raw) {
     try { parsed = JSON.parse(text); } catch (_) { parsed = null; }
   }
   if (Array.isArray(parsed)) {
-    return parsed.map((item, index) => ({
-      name: String(item.name || item.username || ("账号" + (index + 1))),
+    return uniqueAccounts(parsed.map((item, index) => ({
+      name: accountName(item.name || item.username, "账号" + (index + 1)),
       cookie: String(item.cookie || "").trim()
-    })).filter(item => item.cookie);
+    })));
   }
 
-  return text.split(/\r?\n|\|\|\|/).map((item, index) => {
+  return uniqueAccounts(text.split(/\r?\n|\|\|\|/).map((item, index) => {
     const split = item.indexOf(":::");
     if (split < 0) return { name: "账号" + (index + 1), cookie: item.trim() };
-    return { name: item.slice(0, split).trim() || ("账号" + (index + 1)), cookie: item.slice(split + 3).trim() };
-  }).filter(item => item.cookie);
+    return { name: accountName(item.slice(0, split), "账号" + (index + 1)), cookie: item.slice(split + 3).trim() };
+  }));
 }
 
 function mergeAccounts(configured, stored) {
-  const result = [];
-  const seen = {};
-  configured.concat(stored).forEach(item => {
-    if (!item.cookie || seen[item.cookie]) return;
-    seen[item.cookie] = true;
-    result.push(item);
-  });
-  return result;
+  // 配置优先；同名账号的最后一个 Cookie 覆盖之前的记录。
+  return uniqueAccounts((Array.isArray(stored) ? stored : []).concat(configured || []));
 }
 
 function parseBody(body) {
@@ -226,18 +244,10 @@ function captureCookie() {
     return;
   }
 
-  const stored = readJSON(COOKIE_KEY, []);
-  const sameCookieIndex = stored.findIndex(item => item && item.cookie === cookie);
-  const sameCookie = sameCookieIndex >= 0;
-  let name = sameCookie ? (stored[sameCookieIndex].name || account) : account;
-  let suffix = 2;
-  while (stored.some((item, index) => item && index !== sameCookieIndex && item.name === name && item.cookie !== cookie)) {
-    name = account + "-" + suffix++;
-  }
+  const stored = Array.isArray(readJSON(COOKIE_KEY, [])) ? readJSON(COOKIE_KEY, []) : [];
+  const name = accountName(account, "账号");
   const record = { name, identity: "cookie:" + cookie.slice(0, 24), cookie, ua: userAgent };
-  const next = stored.slice();
-  if (sameCookie) next[sameCookieIndex] = { ...next[sameCookieIndex], ...record };
-  else next.push(record);
+  const next = uniqueAccounts(stored.concat(record));
 
   if (!writeJSON(COOKIE_KEY, next)) {
     notify("北执签到", name, "Cookie 保存失败。", notifyEnabled);
@@ -266,11 +276,12 @@ async function runAccount(account, policy) {
   const headers = accountHeaders(account.cookie, token, account.ua);
   const status = await request("GET", BASE_URL + "/api/user/checkin?month=" + encodeURIComponent(currentMonth()), headers, policy);
   const statusPayload = parseBody(status.data);
-  if (status.error || status.response.status < 200 || status.response.status >= 300 || statusPayload.success === false) {
-    return { name: account.name, ok: false, text: "签到状态查询失败：" + apiMessage(statusPayload, status.error || "HTTP " + status.response.status) };
-  }
+  // 状态接口异常时不直接判定失败：仍尝试签到，由签到接口判定是否已签。
   const stats = statusPayload.data && statusPayload.data.stats;
-  const checkedToday = !!(stats && (stats.checked_in_today === true || stats.checked_in_today === 1));
+  const checkedToday = !!(
+    stats &&
+    (stats.checked_in_today === true || stats.checked_in_today === 1)
+  ) || isAlreadyCheckedIn(statusPayload);
 
   let checkin = null;
   let checkinPayload = {};
@@ -306,6 +317,10 @@ async function runAccount(account, policy) {
     checkinPayload
   ], ["quota_awarded", "quota", "reward", "amount", "received"]);
   if (!checkinOk) {
+    // 接口返回“已签到/重复签到”时视为当天已签。
+    if (isAlreadyCheckedIn(checkinPayload)) {
+      return { name: summary.name || account.name, ok: true, text: "已签到，" + summary.text + suffix };
+    }
     return { name: summary.name || account.name, ok: false, text: "签到失败：" + checkinReason(checkinPayload, checkin.response) + "；" + summary.text + suffix };
   }
 
@@ -344,8 +359,14 @@ async function run() {
   $done();
 }
 
-if (typeof $request !== "undefined" && $request && typeof $script !== "undefined" && $script.type === "http-request") captureCookie();
-else run().catch(error => {
-  notify("北执每日签到", "脚本异常", String(error && error.message || error), true);
-  $done();
-});
+if (typeof module !== "undefined" && module.exports) {
+  module.exports = { parseAccounts, mergeAccounts, uniqueAccounts, accountName };
+} else if (typeof $request !== "undefined" && $request && typeof $script !== "undefined" && $script.type === "http-request") {
+  captureCookie();
+} else {
+  run().catch(error => {
+    console.log("[Beizhi] 脚本异常：" + String(error && error.message || error));
+    notify("北执每日签到", "脚本异常", String(error && error.message || error), true);
+    $done();
+  });
+}

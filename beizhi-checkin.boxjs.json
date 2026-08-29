@@ -19,7 +19,7 @@
           "name": "账号 Cookie",
           "val": "",
           "type": "textarea",
-          "desc": "每行一个账号，格式：账号名:::Cookie。也支持用 ||| 分隔多个账号，例如：账号1:::Cookie1|||账号2:::Cookie2"
+          "desc": "每行一个账号，格式：账号名:::Cookie。也支持用 ||| 分隔多个账号，例如：账号1:::Cookie1|||账号2:::Cookie2。同名账号视为同一账号，后填写的 Cookie 会覆盖之前保存的 Cookie。"
         },
         {
           "id": "beizhi_sylu_checkin_notify",
