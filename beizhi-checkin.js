@@ -4,6 +4,8 @@
  */
 const BASE_URL = "https://beizhi.sylu.cc";
 const COOKIE_KEY = "beizhi_sylu_checkin_cookies";
+const COOKIE_CAPTURED_KEY = "beizhi_sylu_checkin_captured";
+const COOKIE_UA_KEY = "beizhi_sylu_checkin_ua";
 const DEFAULT_UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148 Safari/604.1";
 
 function getArgument(name) {
@@ -78,7 +80,14 @@ function apiMessage(payload, fallback) {
 
 function request(method, url, headers, policy, body) {
   return new Promise(resolve => {
-    const options = { url, headers, timeout: 10, policy: policy || "DIRECT" };
+    const options = {
+      url,
+      headers,
+      timeout: 10,
+      policy: policy || "DIRECT",
+      "auto-cookie": false,
+      "auto-redirect": true
+    };
     if (body !== undefined) options.body = body;
     const callback = (error, response, data) => resolve({ error, response: response || {}, data: data || "" });
     if (method === "POST") $httpClient.post(options, callback);
@@ -86,9 +95,9 @@ function request(method, url, headers, policy, body) {
   });
 }
 
-function accountHeaders(cookie, token) {
+function accountHeaders(cookie, token, userAgent) {
   const headers = {
-    "User-Agent": DEFAULT_UA,
+    "User-Agent": userAgent || DEFAULT_UA,
     "Accept": "application/json, text/plain, */*",
     "Origin": BASE_URL,
     "Referer": BASE_URL + "/profile",
@@ -126,42 +135,61 @@ function accountSummary(user) {
 
 function captureCookie() {
   const cookie = headerValue($request.headers, "Cookie").trim();
+  const userAgent = headerValue($request.headers, "User-Agent").trim();
   const account = getArgument("account") || "账号";
   const notifyEnabled = getArgument("notify") !== "false";
+
+  // /profile 是唯一捕获入口；无 Cookie 的未登录请求直接忽略。
   if (!cookie) {
-    notify("北执签到", account, "未捕获到 Cookie，请确认已登录并重新打开个人中心。", notifyEnabled);
     $done({});
     return;
   }
 
   const stored = readJSON(COOKIE_KEY, []);
+  const current = stored.find(item => item && item.name === account);
+  const captured = readJSON(COOKIE_CAPTURED_KEY, {});
+  const normalizedUA = userAgent || (current && current.ua) || DEFAULT_UA;
+  const sameCookie = current && current.cookie === cookie && current.ua === normalizedUA;
   const next = stored.filter(item => item && item.name !== account && item.cookie !== cookie);
-  next.unshift({ name: account, cookie });
+  next.unshift({ name: account, cookie, ua: normalizedUA });
+
   if (!writeJSON(COOKIE_KEY, next)) {
     notify("北执签到", account, "Cookie 保存失败。", notifyEnabled);
-  } else {
+  } else if (!sameCookie || captured[account] !== cookie) {
+    captured[account] = cookie;
+    writeJSON(COOKIE_CAPTURED_KEY, captured);
     notify("北执签到", account, "Cookie 已保存，可用于定时签到。", notifyEnabled);
   }
   $done({});
 }
 
 async function runAccount(account, policy) {
-  const baseHeaders = accountHeaders(account.cookie, "");
+  const baseHeaders = accountHeaders(account.cookie, "", account.ua);
   const refresh = await request("POST", BASE_URL + "/api/user/auth/refresh", baseHeaders, policy);
   const refreshPayload = parseBody(refresh.data);
   const token = extractToken(refreshPayload);
-  const headers = accountHeaders(account.cookie, token);
 
+  if (refresh.error) {
+    return { name: account.name, ok: false, text: "刷新登录态失败：" + String(refresh.error) };
+  }
+  if (refresh.response.status === 401 || !token) {
+    return { name: account.name, ok: false, text: "Cookie 已失效或账号未登录，刷新接口未返回有效登录令牌" };
+  }
+  if (refresh.response.status < 200 || refresh.response.status >= 300 || refreshPayload.success === false) {
+    return { name: account.name, ok: false, text: "刷新登录态失败：" + apiMessage(refreshPayload, "HTTP " + refresh.response.status) };
+  }
+
+  const headers = accountHeaders(account.cookie, token, account.ua);
   const checkin = await request("POST", BASE_URL + "/api/user/checkin", headers, policy, {});
   const checkinPayload = parseBody(checkin.data);
   const profile = await request("GET", BASE_URL + "/api/user/self", headers, policy);
   const profilePayload = parseBody(profile.data);
 
-  if (profile.response.status === 401 || checkin.response.status === 401) {
-    return { name: account.name, ok: false, text: "Cookie 已失效或账号未登录" };
+  if (checkin.response.status === 401 || profile.response.status === 401) {
+    return { name: account.name, ok: false, text: "登录令牌已失效，请重新捕获 Cookie" };
   }
-  if (profile.error && checkin.error) {
-    return { name: account.name, ok: false, text: "网络请求失败" };
+  if (checkin.error || profile.error) {
+    return { name: account.name, ok: false, text: "网络请求失败：" + String(checkin.error || profile.error) };
   }
 
   const user = extractUser(profilePayload);
