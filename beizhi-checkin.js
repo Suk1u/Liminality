@@ -124,13 +124,32 @@ function formatNumber(value) {
   return Number.isFinite(number) ? number.toLocaleString("en-US") : String(value);
 }
 
+function getFirstValue(objects, keys) {
+  for (const object of objects) {
+    if (!object || typeof object !== "object") continue;
+    for (const key of keys) {
+      if (object[key] !== undefined && object[key] !== null && object[key] !== "") return object[key];
+    }
+  }
+  return undefined;
+}
+
 function accountSummary(user) {
-  const name = user.username || user.display_name || user.name || "未命名账号";
-  const quota = user.quota !== undefined ? user.quota : user.remaining_quota;
-  const used = user.used_quota !== undefined ? user.used_quota : user.usedQuota;
-  const parts = ["额度 " + formatNumber(quota)];
+  const name = getFirstValue([user], ["username", "display_name", "name"]) || "未命名账号";
+  const quota = getFirstValue([user], ["quota", "remaining_quota", "remainingQuota", "balance", "money"]);
+  const used = getFirstValue([user], ["used_quota", "usedQuota"]);
+  const parts = ["当前余额 " + formatNumber(quota)];
   if (used !== undefined) parts.push("已用 " + formatNumber(used));
   return { name: String(name), text: parts.join("，") };
+}
+
+function isAlreadyCheckedIn(payload) {
+  const text = JSON.stringify(payload || {});
+  return /已签到|今日已签到|今天已签到|already\s*check(?:ed)?\s*in|already\s*signed|checked\s*in|重复签到|请勿重复/i.test(text);
+}
+
+function checkinReason(payload, response) {
+  return apiMessage(payload, "HTTP " + ((response && response.status) || 0));
 }
 
 function captureCookie() {
@@ -194,11 +213,24 @@ async function runAccount(account, policy) {
 
   const user = extractUser(profilePayload);
   const summary = accountSummary(user);
-  const checkinOk = checkin.response.status >= 200 && checkin.response.status < 300 && checkinPayload.success !== false;
-  const reward = checkinPayload.data && (checkinPayload.data.quota || checkinPayload.data.reward || checkinPayload.data.amount);
-  let action = checkinOk ? "签到请求成功" : apiMessage(checkinPayload, "签到未成功");
-  if (reward !== undefined) action += "，奖励 " + formatNumber(reward);
-  return { name: summary.name || account.name, ok: checkinOk, text: action + "；" + summary.text };
+  const httpOk = checkin.response.status >= 200 && checkin.response.status < 300;
+  const alreadyCheckedIn = isAlreadyCheckedIn(checkinPayload);
+  const checkinOk = httpOk && (checkinPayload.success !== false || alreadyCheckedIn);
+  const reward = getFirstValue([
+    checkinPayload && checkinPayload.data,
+    checkinPayload
+  ], ["quota", "reward", "amount", "received"]);
+
+  if (alreadyCheckedIn) {
+    return { name: summary.name || account.name, ok: true, text: "已签到，" + summary.text };
+  }
+  if (!checkinOk) {
+    return { name: summary.name || account.name, ok: false, text: "签到失败：" + checkinReason(checkinPayload, checkin.response) };
+  }
+
+  let text = "签到成功，" + summary.text;
+  if (reward !== undefined) text += "，奖励 " + formatNumber(reward);
+  return { name: summary.name || account.name, ok: true, text };
 }
 
 async function run() {
