@@ -6,6 +6,8 @@ const BASE_URL = "https://beizhi.sylu.cc";
 const COOKIE_KEY = "beizhi_sylu_checkin_cookies";
 const COOKIE_CAPTURED_KEY = "beizhi_sylu_checkin_captured";
 const COOKIE_UA_KEY = "beizhi_sylu_checkin_ua";
+const QUOTA_PER_UNIT = 500000;
+const CURRENCY_SYMBOL = "🍊";
 const DEFAULT_UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148 Safari/604.1";
 
 function getArgument(name) {
@@ -124,6 +126,28 @@ function formatNumber(value) {
   return Number.isFinite(number) ? number.toLocaleString("en-US") : String(value);
 }
 
+function formatQuota(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return "未知";
+  const amount = number / QUOTA_PER_UNIT;
+  return amount.toFixed(2).replace(/\.00$/, "").replace(/(\.\d)0$/, "$1");
+}
+
+function formatCurrencyQuota(value) {
+  const formatted = formatQuota(value);
+  return formatted === "未知" ? "未知" : CURRENCY_SYMBOL + formatted;
+}
+
+function currentMonth() {
+  const date = new Date();
+  return date.getFullYear() + "-" + String(date.getMonth() + 1).padStart(2, "0");
+}
+
+function today() {
+  const date = new Date();
+  return date.getFullYear() + "-" + String(date.getMonth() + 1).padStart(2, "0") + "-" + String(date.getDate()).padStart(2, "0");
+}
+
 function getFirstValue(objects, keys) {
   for (const object of objects) {
     if (!object || typeof object !== "object") continue;
@@ -136,11 +160,36 @@ function getFirstValue(objects, keys) {
 
 function accountSummary(user) {
   const name = getFirstValue([user], ["username", "display_name", "name"]) || "未命名账号";
-  const quota = getFirstValue([user], ["quota", "remaining_quota", "remainingQuota", "balance", "money"]);
-  const used = getFirstValue([user], ["used_quota", "usedQuota"]);
-  const parts = ["当前余额 " + formatNumber(quota)];
-  if (used !== undefined) parts.push("已用 " + formatNumber(used));
-  return { name: String(name), text: parts.join("，") };
+  const quota = getFirstValue([user], ["quota"]);
+  const used = getFirstValue([user], ["used_quota"]);
+  return {
+    name: String(name),
+    text: "当前余额 " + formatCurrencyQuota(quota) + "，总用量 " + formatCurrencyQuota(used)
+  };
+}
+
+function subscriptionSummary(payload) {
+  const data = payload && payload.data;
+  const subscriptions = Array.isArray(data && data.subscriptions) ? data.subscriptions : [];
+  const now = Date.now() / 1000;
+  const active = subscriptions.filter(item => {
+    const subscription = item && (item.subscription || item);
+    return subscription && subscription.status !== "cancelled" && (!subscription.end_time || subscription.end_time > now);
+  });
+  if (!active.length) return "";
+
+  const item = active[0];
+  const subscription = item.subscription || item;
+  const plan = item.plan || {};
+  const title = plan.title || item.plan_title || subscription.plan_title || "订阅";
+  const days = subscription.end_time ? Math.max(0, Math.ceil((subscription.end_time - now) / 86400)) : 0;
+  const total = Number(subscription.amount_total || 0);
+  const used = Number(subscription.amount_used || 0);
+  const remaining = total > 0 ? Math.max(0, total - used) : 0;
+  let text = "订阅：" + title + "，有效";
+  if (days) text += "，剩余 " + days + " 天";
+  if (total > 0) text += "，剩余额度 " + formatCurrencyQuota(remaining);
+  return text;
 }
 
 function isAlreadyCheckedIn(payload) {
@@ -199,38 +248,50 @@ async function runAccount(account, policy) {
   }
 
   const headers = accountHeaders(account.cookie, token, account.ua);
-  const checkin = await request("POST", BASE_URL + "/api/user/checkin", headers, policy, {});
-  const checkinPayload = parseBody(checkin.data);
+  const status = await request("GET", BASE_URL + "/api/user/checkin?month=" + encodeURIComponent(currentMonth()), headers, policy);
+  const statusPayload = parseBody(status.data);
+  const checkedToday = statusPayload.data && statusPayload.data.stats && statusPayload.data.stats.checked_in_today === true;
+
+  let checkin = null;
+  let checkinPayload = {};
+  if (!checkedToday) {
+    checkin = await request("POST", BASE_URL + "/api/user/checkin", headers, policy, {});
+    checkinPayload = parseBody(checkin.data);
+  }
+
   const profile = await request("GET", BASE_URL + "/api/user/self", headers, policy);
   const profilePayload = parseBody(profile.data);
+  const subscription = await request("GET", BASE_URL + "/api/subscription/self", headers, policy);
+  const subscriptionPayload = parseBody(subscription.data);
 
-  if (checkin.response.status === 401 || profile.response.status === 401) {
+  if (profile.response.status === 401 || (!checkedToday && checkin.response.status === 401)) {
     return { name: account.name, ok: false, text: "登录令牌已失效，请重新捕获 Cookie" };
   }
-  if (checkin.error || profile.error) {
-    return { name: account.name, ok: false, text: "网络请求失败：" + String(checkin.error || profile.error) };
+  if (profile.error || (!checkedToday && checkin.error)) {
+    return { name: account.name, ok: false, text: "网络请求失败：" + String(profile.error || checkin.error) };
   }
 
   const user = extractUser(profilePayload);
   const summary = accountSummary(user);
+  const subscriptionText = subscriptionSummary(subscriptionPayload);
+  const suffix = subscriptionText ? "；" + subscriptionText : "";
+  if (checkedToday) {
+    return { name: summary.name || account.name, ok: true, text: "已签到，" + summary.text + suffix };
+  }
+
   const httpOk = checkin.response.status >= 200 && checkin.response.status < 300;
-  const alreadyCheckedIn = isAlreadyCheckedIn(checkinPayload);
-  const checkinOk = httpOk && (checkinPayload.success !== false || alreadyCheckedIn);
+  const checkinOk = httpOk && checkinPayload.success !== false;
   const reward = getFirstValue([
     checkinPayload && checkinPayload.data,
     checkinPayload
-  ], ["quota", "reward", "amount", "received"]);
-
-  if (alreadyCheckedIn) {
-    return { name: summary.name || account.name, ok: true, text: "已签到，" + summary.text };
-  }
+  ], ["quota_awarded", "quota", "reward", "amount", "received"]);
   if (!checkinOk) {
-    return { name: summary.name || account.name, ok: false, text: "签到失败：" + checkinReason(checkinPayload, checkin.response) };
+    return { name: summary.name || account.name, ok: false, text: "签到失败：" + checkinReason(checkinPayload, checkin.response) + "；" + summary.text + suffix };
   }
 
   let text = "签到成功，" + summary.text;
-  if (reward !== undefined) text += "，奖励 " + formatNumber(reward);
-  return { name: summary.name || account.name, ok: true, text };
+  if (reward !== undefined) text += "，今日增加 " + formatCurrencyQuota(reward);
+  return { name: summary.name || account.name, ok: true, text: text + suffix };
 }
 
 async function run() {
