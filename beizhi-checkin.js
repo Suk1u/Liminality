@@ -203,32 +203,46 @@ function checkinReason(payload, response) {
 
 function captureCookie() {
   const cookie = headerValue($request.headers, "Cookie").trim();
-  const userAgent = headerValue($request.headers, "User-Agent").trim();
-  const account = getArgument("account") || "账号";
+  const userAgent = headerValue($request.headers, "User-Agent").trim() || DEFAULT_UA;
+  const configuredName = getArgument("account") || "账号";
   const notifyEnabled = getArgument("notify") !== "false";
 
-  // /profile 是唯一捕获入口；无 Cookie 的未登录请求直接忽略。
+  // 只处理带 Cookie 的页面请求；未登录请求不提示、不覆盖已有账号。
   if (!cookie) {
     $done({});
     return;
   }
 
-  const stored = readJSON(COOKIE_KEY, []);
-  const current = stored.find(item => item && item.name === account);
-  const captured = readJSON(COOKIE_CAPTURED_KEY, {});
-  const normalizedUA = userAgent || (current && current.ua) || DEFAULT_UA;
-  const sameCookie = current && current.cookie === cookie && current.ua === normalizedUA;
-  const next = stored.filter(item => item && item.name !== account && item.cookie !== cookie);
-  next.unshift({ name: account, cookie, ua: normalizedUA });
+  const headers = accountHeaders(cookie, "", userAgent);
+  request("GET", BASE_URL + "/api/user/self", headers, "DIRECT").then(result => {
+    const payload = parseBody(result.data);
+    if (result.error || result.response.status !== 200 || payload.success === false) {
+      console.log("[Beizhi] Cookie 校验失败：" + apiMessage(payload, result.error || "HTTP " + result.response.status));
+      $done({});
+      return;
+    }
 
-  if (!writeJSON(COOKIE_KEY, next)) {
-    notify("北执签到", account, "Cookie 保存失败。", notifyEnabled);
-  } else if (!sameCookie || captured[account] !== cookie) {
-    captured[account] = cookie;
-    writeJSON(COOKIE_CAPTURED_KEY, captured);
-    notify("北执签到", account, "Cookie 已保存，可用于定时签到。", notifyEnabled);
-  }
-  $done({});
+    const user = extractUser(payload);
+    const userId = getFirstValue([user], ["id", "user_id", "userId"]);
+    const username = getFirstValue([user], ["username", "display_name", "name"]);
+    const identity = userId !== undefined ? "id:" + userId : "name:" + (username || configuredName);
+    const stored = readJSON(COOKIE_KEY, []);
+    const current = stored.find(item => item && (item.identity === identity || item.cookie === cookie));
+    const captured = readJSON(COOKIE_CAPTURED_KEY, {});
+    const name = String(username || configuredName);
+    const sameCookie = current && current.cookie === cookie && current.ua === userAgent;
+    const next = stored.filter(item => item && item.identity !== identity && item.cookie !== cookie);
+    next.push({ name, identity, cookie, ua: userAgent });
+
+    if (!writeJSON(COOKIE_KEY, next)) {
+      notify("北执签到", name, "Cookie 保存失败。", notifyEnabled);
+    } else if (!sameCookie || captured[identity] !== cookie) {
+      captured[identity] = cookie;
+      writeJSON(COOKIE_CAPTURED_KEY, captured);
+      notify("北执签到", name, "Cookie 已保存。当前共保存 " + next.length + " 个账号", notifyEnabled);
+    }
+    $done({});
+  });
 }
 
 async function runAccount(account, policy) {
@@ -255,7 +269,7 @@ async function runAccount(account, policy) {
   let checkin = null;
   let checkinPayload = {};
   if (!checkedToday) {
-    checkin = await request("POST", BASE_URL + "/api/user/checkin", headers, policy, {});
+    checkin = await request("POST", BASE_URL + "/api/user/checkin", headers, policy);
     checkinPayload = parseBody(checkin.data);
   }
 
