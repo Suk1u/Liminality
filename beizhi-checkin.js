@@ -330,29 +330,26 @@ async function runAccount(account, policy) {
 }
 
 async function run() {
-  const boxjsCookies = $persistentStore.read("beizhi_sylu_checkin_boxjs_accounts") || "";
   const notifyEnabled = getArgument("notify") !== "false" && $persistentStore.read("beizhi_sylu_checkin_notify") !== "false";
-  const policy = getArgument("policy") || $persistentStore.read("beizhi_sylu_checkin_policy") || "DIRECT";
-  const configured = parseAccounts(getArgument("cookies"));
-  const stored = readJSON(COOKIE_KEY, []);
-  const boxjsAccounts = parseAccounts(boxjsCookies);
-  const accounts = mergeAccounts(configured.concat(boxjsAccounts), Array.isArray(stored) ? stored : []);
+  const policy = getArgument("policy") || "DIRECT";
+  // 双账号来源：模块参数 Cookie1 / Cookie2（可为空），同名去重覆盖，最多 2 个并行。
+  const configured = parseAccounts(
+    [getArgument("Cookie1"), getArgument("Cookie2")].filter(Boolean).join("\n")
+  );
+  const stored = Array.isArray(readJSON(COOKIE_KEY, [])) ? readJSON(COOKIE_KEY, []) : [];
+  const accounts = mergeAccounts(configured, stored).slice(0, 2);
   if (!accounts.length) {
-    notify("北执每日签到", "未配置账号", "请先在 BoxJs 填写账号 Cookie，或登录后打开个人中心获取 Cookie。", true);
+    notify("北执每日签到", "未配置账号", "请填写模块参数 Cookie1 / Cookie2，或登录后在个人中心获取 Cookie。", true);
     $done();
     return;
   }
 
-  const results = [];
-  for (const account of accounts) {
-    try { results.push(await runAccount(account, policy)); }
-    catch (error) { results.push({ name: account.name, ok: false, text: error.message || "脚本异常" }); }
-  }
-  if (!results.length) {
-    notify("北执每日签到", "执行失败", "没有可执行的账号。", true);
-    $done();
-    return;
-  }
+  // 两个账号并行执行，单个账号异常不阻塞另一个。
+  const results = await Promise.all(accounts.map(async account => {
+    try { return await runAccount(account, policy); }
+    catch (error) { return { name: account.name, ok: false, text: error.message || "脚本异常" }; }
+  }));
+
   const failed = results.filter(item => !item.ok).length;
   const body = results.map((item, index) => (index + 1) + ". " + item.name + "：" + item.text).join("\n");
   notify("北执每日签到", failed ? (failed + " 个账号失败") : (results.length + " 个账号完成"), body, notifyEnabled || failed > 0);
