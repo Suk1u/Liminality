@@ -1,0 +1,44 @@
+{
+  "id": "suk1u.beizhi.checkin",
+  "name": "北执每日签到",
+  "author": "Suk1u",
+  "icon": "https://beizhi.sylu.cc/logo.png",
+  "repo": "https://github.com/Suk1u/Liminality",
+  "apps": [
+    {
+      "id": "beizhi",
+      "name": "北执每日签到",
+      "keys": [
+        "beizhi_sylu_checkin_boxjs_accounts",
+        "beizhi_sylu_checkin_notify",
+        "beizhi_sylu_checkin_policy"
+      ],
+      "settings": [
+        {
+          "id": "beizhi_sylu_checkin_boxjs_accounts",
+          "name": "账号 Cookie",
+          "val": "",
+          "type": "textarea",
+          "desc": "每行一个账号，格式：账号名:::Cookie。也支持用 ||| 分隔多个账号，例如：账号1:::Cookie1|||账号2:::Cookie2"
+        },
+        {
+          "id": "beizhi_sylu_checkin_notify",
+          "name": "签到通知",
+          "val": true,
+          "type": "boolean",
+          "desc": "签到成功、已签到、失败和余额信息通知"
+        },
+        {
+          "id": "beizhi_sylu_checkin_policy",
+          "name": "请求策略",
+          "val": "DIRECT",
+          "type": "text",
+          "desc": "Surge 请求策略名称，默认 DIRECT"
+        }
+      ],
+      "author": "Suk1u",
+      "repo": "https://github.com/Suk1u/Liminality",
+      "script": "https://raw.githubusercontent.com/Suk1u/Liminality/refs/heads/main/beizhi-checkin.js"
+    }
+  ]
+}

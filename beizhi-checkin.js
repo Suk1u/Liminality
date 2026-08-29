@@ -65,7 +65,7 @@ function parseAccounts(raw) {
     })).filter(item => item.cookie);
   }
 
-  return text.split("|||").map((item, index) => {
+  return text.split(/\r?\n|\|\|\|/).map((item, index) => {
     const split = item.indexOf(":::");
     if (split < 0) return { name: "账号" + (index + 1), cookie: item.trim() };
     return { name: item.slice(0, split).trim() || ("账号" + (index + 1)), cookie: item.slice(split + 3).trim() };
@@ -229,9 +229,11 @@ function captureCookie() {
   const stored = readJSON(COOKIE_KEY, []);
   const sameCookieIndex = stored.findIndex(item => item && item.cookie === cookie);
   const sameCookie = sameCookieIndex >= 0;
-  let name = account;
+  let name = sameCookie ? (stored[sameCookieIndex].name || account) : account;
   let suffix = 2;
-  while (stored.some(item => item && item.name === name && item.cookie !== cookie)) name = account + "-" + suffix++;
+  while (stored.some((item, index) => item && index !== sameCookieIndex && item.name === name && item.cookie !== cookie)) {
+    name = account + "-" + suffix++;
+  }
   const record = { name, identity: "cookie:" + cookie.slice(0, 24), cookie, ua: userAgent };
   const next = stored.slice();
   if (sameCookie) next[sameCookieIndex] = { ...next[sameCookieIndex], ...record };
@@ -240,13 +242,7 @@ function captureCookie() {
   if (!writeJSON(COOKIE_KEY, next)) {
     notify("北执签到", name, "Cookie 保存失败。", notifyEnabled);
   } else {
-    const captured = readJSON(COOKIE_CAPTURED_KEY, {});
-    const noticeKey = cookie.slice(0, 32);
-    if (captured[noticeKey] !== cookie) {
-      captured[noticeKey] = cookie;
-      writeJSON(COOKIE_CAPTURED_KEY, captured);
-      notify("北执签到", name, "Cookie 获取成功，当前共保存 " + next.length + " 个账号", notifyEnabled);
-    }
+    notifyOnce("capture:" + cookie.slice(0, 32), "北执签到", name, "Cookie 获取成功，当前共保存 " + next.length + " 个账号", notifyEnabled);
   }
   $done({});
 }
@@ -319,13 +315,15 @@ async function runAccount(account, policy) {
 }
 
 async function run() {
-  const notifyEnabled = getArgument("notify") !== "false";
-  const policy = getArgument("policy") || "DIRECT";
+  const boxjsCookies = $persistentStore.read("beizhi_sylu_checkin_boxjs_accounts") || "";
+  const notifyEnabled = getArgument("notify") !== "false" && $persistentStore.read("beizhi_sylu_checkin_notify") !== "false";
+  const policy = getArgument("policy") || $persistentStore.read("beizhi_sylu_checkin_policy") || "DIRECT";
   const configured = parseAccounts(getArgument("cookies"));
   const stored = readJSON(COOKIE_KEY, []);
-  const accounts = mergeAccounts(configured, Array.isArray(stored) ? stored : []);
+  const boxjsAccounts = parseAccounts(boxjsCookies);
+  const accounts = mergeAccounts(configured.concat(boxjsAccounts), Array.isArray(stored) ? stored : []);
   if (!accounts.length) {
-    notify("北执签到", "未配置账号", "请先登录并打开个人中心捕获 Cookie。", notifyEnabled);
+    notify("北执每日签到", "未配置账号", "请先在 BoxJs 填写账号 Cookie，或登录后打开个人中心获取 Cookie。", true);
     $done();
     return;
   }
@@ -334,6 +332,11 @@ async function run() {
   for (const account of accounts) {
     try { results.push(await runAccount(account, policy)); }
     catch (error) { results.push({ name: account.name, ok: false, text: error.message || "脚本异常" }); }
+  }
+  if (!results.length) {
+    notify("北执每日签到", "执行失败", "没有可执行的账号。", true);
+    $done();
+    return;
   }
   const failed = results.filter(item => !item.ok).length;
   const body = results.map((item, index) => (index + 1) + ". " + item.name + "：" + item.text).join("\n");
