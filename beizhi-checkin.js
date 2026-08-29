@@ -6,6 +6,7 @@ const BASE_URL = "https://beizhi.sylu.cc";
 const COOKIE_KEY = "beizhi_sylu_checkin_cookies";
 const COOKIE_CAPTURED_KEY = "beizhi_sylu_checkin_captured";
 const COOKIE_UA_KEY = "beizhi_sylu_checkin_ua";
+const COOKIE_NOTICE_KEY = "beizhi_sylu_checkin_notice";
 const QUOTA_PER_UNIT = 500000;
 const CURRENCY_SYMBOL = "🍊";
 const DEFAULT_UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148 Safari/604.1";
@@ -28,7 +29,18 @@ function writeJSON(key, value) {
 }
 
 function notify(title, subtitle, body, enabled) {
-  if (enabled !== false) $notification.post(title, subtitle || "", body || "");
+  if (enabled === false) return;
+  try { $notification.post(title, subtitle || "", body || ""); }
+  catch (error) { console.log("[Beizhi] 通知失败：" + error); }
+}
+
+function notifyOnce(key, title, subtitle, body, enabled) {
+  const last = readJSON(COOKIE_NOTICE_KEY, {});
+  const now = Date.now();
+  if (last[key] && now - last[key] < 10000) return;
+  last[key] = now;
+  writeJSON(COOKIE_NOTICE_KEY, last);
+  notify(title, subtitle, body, enabled);
 }
 
 function headerValue(headers, wanted) {
@@ -207,8 +219,8 @@ function captureCookie() {
   const configuredName = getArgument("account") || "账号";
   const notifyEnabled = getArgument("notify") !== "false";
 
-  // 只处理带 Cookie 的页面请求；未登录请求不提示、不覆盖已有账号。
   if (!cookie) {
+    notifyOnce("empty:" + configuredName, "北执签到", configuredName, "未获取到 Cookie，请确认已登录后重新打开个人中心。", notifyEnabled);
     $done({});
     return;
   }
@@ -217,7 +229,8 @@ function captureCookie() {
   request("GET", BASE_URL + "/api/user/self", headers, "DIRECT").then(result => {
     const payload = parseBody(result.data);
     if (result.error || result.response.status !== 200 || payload.success === false) {
-      console.log("[Beizhi] Cookie 校验失败：" + apiMessage(payload, result.error || "HTTP " + result.response.status));
+      const reason = apiMessage(payload, result.error || "HTTP " + result.response.status);
+      notifyOnce("invalid:" + configuredName, "北执签到", configuredName, "Cookie 校验失败：" + reason, notifyEnabled);
       $done({});
       return;
     }
@@ -239,8 +252,11 @@ function captureCookie() {
     } else if (!sameCookie || captured[identity] !== cookie) {
       captured[identity] = cookie;
       writeJSON(COOKIE_CAPTURED_KEY, captured);
-      notify("北执签到", name, "Cookie 已保存。当前共保存 " + next.length + " 个账号", notifyEnabled);
+      notify("北执签到", name, "Cookie 获取成功，当前共保存 " + next.length + " 个账号", notifyEnabled);
     }
+    $done({});
+  }).catch(error => {
+    notifyOnce("error:" + configuredName, "北执签到", configuredName, "Cookie 校验请求失败：" + error, notifyEnabled);
     $done({});
   });
 }
@@ -264,7 +280,11 @@ async function runAccount(account, policy) {
   const headers = accountHeaders(account.cookie, token, account.ua);
   const status = await request("GET", BASE_URL + "/api/user/checkin?month=" + encodeURIComponent(currentMonth()), headers, policy);
   const statusPayload = parseBody(status.data);
-  const checkedToday = statusPayload.data && statusPayload.data.stats && statusPayload.data.stats.checked_in_today === true;
+  if (status.error || status.response.status < 200 || status.response.status >= 300 || statusPayload.success === false) {
+    return { name: account.name, ok: false, text: "签到状态查询失败：" + apiMessage(statusPayload, status.error || "HTTP " + status.response.status) };
+  }
+  const stats = statusPayload.data && statusPayload.data.stats;
+  const checkedToday = !!(stats && (stats.checked_in_today === true || stats.checked_in_today === 1));
 
   let checkin = null;
   let checkinPayload = {};
@@ -332,4 +352,7 @@ async function run() {
 }
 
 if (typeof $request !== "undefined" && $request && typeof $script !== "undefined" && $script.type === "http-request") captureCookie();
-else run();
+else run().catch(error => {
+  notify("北执每日签到", "脚本异常", String(error && error.message || error), true);
+  $done();
+});
